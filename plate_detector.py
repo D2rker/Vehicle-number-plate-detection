@@ -8,6 +8,7 @@ import pytesseract
 import tkinter.font as tkFont
 import threading
 
+
 # Uncomment and set the path if Tesseract-OCR is not in your PATH
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
@@ -37,6 +38,7 @@ def create_or_update_excel():
     else:
         messagebox.showwarning("Input Error", "All fields are required!")
 
+
 def open_file(file_path):
     try:
         if platform.system() == 'Windows':
@@ -48,26 +50,44 @@ def open_file(file_path):
     except Exception as e:
         messagebox.showerror("Error", f"Failed to open file: {e}")
 
+
 # Function to remove data (open Excel file)
 def Open_Excel_File():
     open_file("data.xlsx")
 
+
 # Function to detect vehicles and recognize text
 saved_letter = "0123456789ZXCVBNMASDFGHJKLQWERTYUIOP"
 
+
 def detect_plate(frame, n_plate_detector, df):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    detections = n_plate_detector.detectMultiScale(gray, scaleFactor=1.05, minNeighbors=7)
+
+    # Applying Gaussian Blur
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    # Adaptive Thresholding
+    adaptive_thresh = cv2.adaptiveThreshold(blurred, 255,
+                                            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                            cv2.THRESH_BINARY,
+                                            11,
+                                            2)
+
+    # Using different parameters for detection
+    detections = n_plate_detector.detectMultiScale(adaptive_thresh, scaleFactor=1.1, minNeighbors=5)
 
     if len(detections) == 0:
         return  # Exit if no plates are detected
 
     for (x, y, w, h) in detections:
-        number_plate = gray[y:y + h, x:x + w]
-        number_plate = cv2.threshold(number_plate, 100, 255, cv2.THRESH_BINARY)[1]
+        number_plate = adaptive_thresh[y:y + h, x:x + w]
+
+        # Apply more preprocessing to the detected plate area
+        number_plate = cv2.dilate(number_plate, None, iterations=1)
+        number_plate = cv2.erode(number_plate, None, iterations=1)
 
         try:
-            extracted_text = pytesseract.image_to_string(number_plate, config='--psm 8')
+            extracted_text = pytesseract.image_to_string(number_plate, config='--psm 7 --oem 3')
         except Exception as e:
             messagebox.showerror("OCR Error", f"Error during text extraction: {e}")
             continue
@@ -75,7 +95,7 @@ def detect_plate(frame, n_plate_detector, df):
         plate = ''.join([char for char in extracted_text if char in saved_letter]).strip()
 
         if plate:
-            cv2.rectangle(frame, (x, y), (x + w, y + h), 2)
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)  # Green rectangle for detected plate
             cv2.putText(frame, plate, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
 
             match = df[df['Number Plate'].str.contains(plate, na=False, case=False)]
@@ -85,6 +105,9 @@ def detect_plate(frame, n_plate_detector, df):
                     print(f"Match Found: Name: {row['Name']}, Number Plate: {row['Number Plate']}")
             else:
                 cv2.putText(frame, "No Match Found", (x, y + h + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+        else:
+            cv2.putText(frame, "No Plate Detected", (x, y + h + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+
 
 def capture_frames(n_plate_detector, df):
     camera = cv2.VideoCapture(0)
@@ -110,6 +133,7 @@ def capture_frames(n_plate_detector, df):
         camera.release()
         cv2.destroyAllWindows()
 
+
 def scan_vehicle_and_text():
     n_plate_detector_path = "haarcascade_russian_plate_number.xml"
     if not os.path.exists(n_plate_detector_path):
@@ -131,49 +155,34 @@ def scan_vehicle_and_text():
     # Start frame capture in a separate thread
     threading.Thread(target=capture_frames, args=(n_plate_detector, df), daemon=True).start()
 
+
 # Create the main window
 root = tk.Tk()
 root.title("Vehicle Detection and Text Recognition")
-root.geometry("600x400")
-root.configure(bg="#f0f0f0")  # Light gray background
-
-# Create a frame for the heading
-heading_frame = tk.Frame(root, bg="#4a90e2")
-heading_frame.pack(pady=20)
 
 # Define font for the heading (bold)
-heading_font = tkFont.Font(size=18, weight="bold")
+heading_font = tkFont.Font(size=16, weight="bold")
 
 # Add a label for the heading
-heading_label = tk.Label(heading_frame, text="Vehicle Detection", font=heading_font, fg="black")
+heading_label = tk.Label(text="Vehicle Detection System", font=heading_font)
 heading_label.pack()
 
-# Create a frame for buttons
-button_frame = tk.Frame(root, bg="#f0f0f0")
-button_frame.pack(pady=20)
+# Create buttons
+scan_button = tk.Button(text="Scan Vehicle", command=scan_vehicle_and_text, bg='green', fg='white')
+scan_button.pack(side=tk.LEFT, padx=5)
 
-# Create buttons with enhanced styles
-button_style = {'bg': '#4caf50', 'fg': 'white', 'font': ('Arial', 12), 'activebackground': '#388e3c'}
+excel_button = tk.Button(text="Register New Vehicle", command=create_or_update_excel, bg='blue',
+                         fg='white')
+excel_button.pack(side=tk.LEFT, padx=5)
 
-scan_button = tk.Button(button_frame, text="Scan Vehicle", command=scan_vehicle_and_text, **button_style)
-scan_button.pack(side=tk.LEFT, padx=10)
+# New button to open the Excel file
+remove_data_button = tk.Button(text="Open File", command=Open_Excel_File, bg='orange', fg='white')
+remove_data_button.pack(side=tk.LEFT, padx=5)
 
-excel_button = tk.Button(button_frame, text="Register New Vehicle", command=create_or_update_excel, **button_style)
-excel_button.pack(side=tk.LEFT, padx=10)
-
-remove_data_button = tk.Button(button_frame, text="Open File", command=Open_Excel_File, **button_style)
-remove_data_button.pack(side=tk.LEFT, padx=10)
-
-# Add a footer frame
-footer_frame = tk.Frame(root, bg="#4a90e2")
-footer_frame.pack(side=tk.BOTTOM, fill=tk.X)
-
-# Add footer text
-footer_label = tk.Label(footer_frame, text="© 2024 Vehicle Detection System", bg="#4a90e2", fg="white")
-footer_label.pack(pady=5)
 
 def on_closing():
-    root.destroy()
+    if messagebox.askokcancel("Quit", "Do you really want to quit?"):
+        root.destroy()
 
 
 root.protocol("WM_DELETE_WINDOW", on_closing)
