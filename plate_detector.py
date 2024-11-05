@@ -1,5 +1,7 @@
 import tkinter as tk
 from tkinter import messagebox, simpledialog
+import mysql.connector
+from mysql.connector import Error
 import pandas as pd
 import os
 import platform
@@ -11,51 +13,80 @@ import threading
 # Uncomment and set the path if Tesseract-OCR is not in your PATH
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-# Function to create or update an Excel file
-def create_or_update_excel():
-    file_path = "data.xlsx"
 
-    if os.path.exists(file_path):
-        df = pd.read_excel(file_path, engine='openpyxl')
-    else:
-        df = pd.DataFrame(columns=['Name', 'Number Plate', 'City'])
-
-    name = simpledialog.askstring("Input", "Enter Name:")
-    number_plate = simpledialog.askstring("Input", "Enter Number Plate:")
-    city = simpledialog.askstring("Input", "Enter City:")
-
-    if name and number_plate and city:
-        new_data = pd.DataFrame({'Name': [name], 'Number Plate': [number_plate], 'City': [city]})
-        df = pd.concat([df, new_data], ignore_index=True)
-
-        try:
-            df.to_excel(file_path, index=False, engine='openpyxl')
-            messagebox.showinfo("Success", f"Excel file '{file_path}' updated successfully!")
-            open_file(file_path)
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to update file: {e}")
-    else:
-        messagebox.showwarning("Input Error", "All fields are required!")
-
-def open_file(file_path):
+# Function to create or update MySQL database
+def create_or_update_mysql():
     try:
-        if platform.system() == 'Windows':
-            os.startfile(file_path)
-        elif platform.system() == 'Darwin':
-            os.system(f"open {file_path}")
-        else:
-            os.system(f"xdg-open {file_path}")
-    except Exception as e:
-        messagebox.showerror("Error", f"Failed to open file: {e}")
+        connection = mysql.connector.connect(
+            host="localhost",
+            database="vehicle_detection",
+            user="root",
+            password=""
+        )
 
-# Function to remove data (open Excel file)
-def Open_Excel_File():
-    open_file("data.xlsx")
+        if connection.is_connected():
+            name = simpledialog.askstring("Input", "Enter Name:")
+            number_plate = simpledialog.askstring("Input", "Enter Number Plate:")
+            city = simpledialog.askstring("Input", "Enter City:")
+
+            if name and number_plate and city:
+                cursor = connection.cursor()
+                sql_insert_query = """INSERT INTO vehicles (name, number_plate, city)
+                                      VALUES (%s, %s, %s)"""
+                cursor.execute(sql_insert_query, (name, number_plate, city))
+                connection.commit()
+                messagebox.showinfo("Success", "Vehicle registered successfully!")
+                cursor.close()
+            else:
+                messagebox.showwarning("Input Error", "All fields are required!")
+
+    except Error as e:
+        messagebox.showerror("Database Error", f"Error while connecting to MySQL: {e}")
+
+    finally:
+        if connection.is_connected():
+            connection.close()
+
+
+# Function to open MySQL database and display records
+def open_mysql_database():
+    try:
+        connection = mysql.connector.connect(
+            host="localhost",
+            database="vehicle_detection",
+            user="root",
+            password=""
+        )
+
+        if connection.is_connected():
+            cursor = connection.cursor()
+            cursor.execute("SELECT * FROM vehicles")
+            records = cursor.fetchall()
+            display_records(records)
+            cursor.close()
+
+    except Error as e:
+        messagebox.showerror("Database Error", f"Error while connecting to MySQL: {e}")
+
+    finally:
+        if connection.is_connected():
+            connection.close()
+
+
+def display_records(records):
+    if records:
+        record_str = "\n".join(
+            [f"ID: {rec[0]}, Name: {rec[1]}, Number Plate: {rec[2]}, City: {rec[3]}" for rec in records])
+        messagebox.showinfo("Vehicle Records", record_str)
+    else:
+        messagebox.showinfo("Vehicle Records", "No records found.")
+
 
 # Function to detect vehicles and recognize text
 saved_letter = "0123456789ZXCVBNMASDFGHJKLQWERTYUIOP"
 
-def detect_plate(frame, n_plate_detector, df):
+
+def detect_plate(frame, n_plate_detector):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     detections = n_plate_detector.detectMultiScale(gray, scaleFactor=1.05, minNeighbors=7)
 
@@ -78,15 +109,38 @@ def detect_plate(frame, n_plate_detector, df):
             cv2.rectangle(frame, (x, y), (x + w, y + h), 2)
             cv2.putText(frame, plate, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
 
-            match = df[df['Number Plate'].str.contains(plate, na=False, case=False)]
-            if not match.empty:
-                for _, row in match.iterrows():
-                    messagebox.showinfo("Match Found", f"Name: {row['Name']}\nNumber Plate: {row['Number Plate']}")
-                    print(f"Match Found: Name: {row['Name']}, Number Plate: {row['Number Plate']}")
-            else:
-                cv2.putText(frame, "No Match Found", (x, y + h + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+            # Check for matches in the database
+            match_in_db(plate)
 
-def capture_frames(n_plate_detector, df):
+
+def match_in_db(plate):
+    try:
+        connection = mysql.connector.connect(
+            host="localhost",
+            database="vehicle_detection",
+            user="root",
+            password=""
+        )
+
+        if connection.is_connected():
+            cursor = connection.cursor()
+            cursor.execute("SELECT * FROM vehicles WHERE number_plate = %s", (plate,))
+            matches = cursor.fetchall()
+
+            if matches:
+                for match in matches:
+                    messagebox.showinfo("Match Found", f"Name: {match[1]}\nNumber Plate: {match[2]}\nCity: {match[3]}")
+                    print(f"Match Found: Name: {match[1]}, Number Plate: {match[2]}, City: {match[3]}")
+            else:
+                print("No match found for plate:", plate)
+    except Error as e:
+        messagebox.showerror("Database Error", f"Error while connecting to MySQL: {e}")
+    finally:
+        if connection.is_connected():
+            connection.close()
+
+
+def capture_frames(n_plate_detector):
     camera = cv2.VideoCapture(0)
     if not camera.isOpened():
         messagebox.showerror("Camera Error", "Could not open camera.")
@@ -100,7 +154,7 @@ def capture_frames(n_plate_detector, df):
                 break
 
             frame = cv2.resize(frame, (640, 480))
-            detect_plate(frame, n_plate_detector, df)
+            detect_plate(frame, n_plate_detector)
 
             cv2.imshow("Number Plate Detection", frame)
 
@@ -109,6 +163,7 @@ def capture_frames(n_plate_detector, df):
     finally:
         camera.release()
         cv2.destroyAllWindows()
+
 
 def scan_vehicle_and_text():
     n_plate_detector_path = "haarcascade_russian_plate_number.xml"
@@ -121,15 +176,9 @@ def scan_vehicle_and_text():
         messagebox.showerror("Error", "Could not load Haar Cascade classifier.")
         return
 
-    excel_file_path = "data.xlsx"
-    if os.path.exists(excel_file_path):
-        df = pd.read_excel(excel_file_path, engine='openpyxl')
-    else:
-        messagebox.showerror("File Error", "Excel file not found.")
-        return
-
     # Start frame capture in a separate thread
-    threading.Thread(target=capture_frames, args=(n_plate_detector, df), daemon=True).start()
+    threading.Thread(target=capture_frames, args=(n_plate_detector,), daemon=True).start()
+
 
 # Create the main window
 root = tk.Tk()
@@ -158,10 +207,10 @@ button_style = {'bg': '#4caf50', 'fg': 'white', 'font': ('Arial', 12), 'activeba
 scan_button = tk.Button(button_frame, text="Scan Vehicle", command=scan_vehicle_and_text, **button_style)
 scan_button.pack(side=tk.LEFT, padx=10)
 
-excel_button = tk.Button(button_frame, text="Register New Vehicle", command=create_or_update_excel, **button_style)
+excel_button = tk.Button(button_frame, text="Register New Vehicle", command=create_or_update_mysql, **button_style)
 excel_button.pack(side=tk.LEFT, padx=10)
 
-remove_data_button = tk.Button(button_frame, text="Open File", command=Open_Excel_File, **button_style)
+remove_data_button = tk.Button(button_frame, text="Open MySQL Database", command=open_mysql_database, **button_style)
 remove_data_button.pack(side=tk.LEFT, padx=10)
 
 # Add a footer frame
@@ -171,6 +220,7 @@ footer_frame.pack(side=tk.BOTTOM, fill=tk.X)
 # Add footer text
 footer_label = tk.Label(footer_frame, text="© 2024 Vehicle Detection System", bg="#4a90e2", fg="white")
 footer_label.pack(pady=5)
+
 
 def on_closing():
     root.destroy()
